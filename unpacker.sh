@@ -110,7 +110,7 @@ while (($#)); do
     shift
 done
 
-if [[ -z "$FIRMWARE_FILE" && "$CLEAN" != true ]]; then
+if [[ -z "$FIRMWARE_FILE" && "$CLEAN" != true && "$PACK" != true ]]; then
     usage
     exit 1
 fi
@@ -142,9 +142,9 @@ if [[ "$UNPACK" == true && "$PACK" == true ]]; then
     exit 2
 fi
 
-if [[ "$UNPACK" == true || "$PACK" == true ]]; then
+if [[ "$UNPACK" == true ]]; then
     if [[ "$LEVEL1" != true && "$LEVEL2" != true && "$LEVEL3" != true ]]; then
-        printf '%sError: --unpack/-u or --pack/-p require a level flag (-l1, -l2, or -l3)%s\n' "$RED" "$NC" >&2
+        printf '%sError: --unpack/-u requires a level flag (-l1, -l2, or -l3)%s\n' "$RED" "$NC" >&2
         usage >&2
         exit 2
     fi
@@ -480,7 +480,7 @@ EOF
 
     python3 "$PYTHON_TOOLS_DIR/splitdtb.py" "$dtb_dir/dtb" "$dtb_dir"  $level2_config/dtb_unpack
 
-        for f in "$dtb_dir"/*.dtb; do
+    for f in "$dtb_dir"/*.dtb; do
         dtc -I dtb -O dts "$f" > "${f%.dtb}.dts"
         mkdir -p "$level2_dir/dtb"
         mv "${f%.dtb}.dts" "$level2_dir/dtb/"
@@ -500,11 +500,353 @@ EOF
     printf '%s' "$NC"
 }
 
-pack_level_one_firmware() {
+pack_all_level_firmware() {
     local level1_dir="$OUTDIR/level1"
     local level2_dir="$OUTDIR/level2"
+    local work_dir_aik="$SCRIPT_DIR/bin/aik"
+    local level2_config="$level2_dir/.config"
+    local size
+
+    mkd "$level1_dir/Image"
+
+    # pack boot and recovery using AIK
+    for partition_name in boot recovery; do
+        local partition_img="$partition_name.img"
+        
+        # Clean up AIK directory first
+        cd "$work_dir_aik"
+        bash cleanup.sh
+        cd "$SCRIPT_DIR"
+        
+        # Copy files to AIK working directory with proper naming
+        # AIK expects files with partition name prefix (e.g., boot-ramdiskcomp)
+        cp -r "$level2_dir/$partition_name/split_img" "$work_dir_aik/"
+        cp -r "$level2_dir/$partition_name/ramdisk" "$work_dir_aik/"
+        
+        # Rename split_img files to add partition prefix that AIK expects
+        cd "$work_dir_aik/split_img"
+        for f in *; do
+            if [[ -f "$f" ]]; then
+                mv "$f" "${partition_name}-${f}"
+            fi
+        done
+        cd "$work_dir_aik"
+        
+        # Repack the image
+        bash repackimg.sh
+        
+        # Move the repacked image
+        if [[ -f "$work_dir_aik/image-new.img" ]]; then
+            mv "$work_dir_aik/image-new.img" "$level1_dir/Image/$partition_img"
+            cd "$SCRIPT_DIR"
+            
+            # Add AVB hash footer to the repacked image (required for verified boot)
+            printf '%sAdding AVB footer to %s...%s\n' "$ORANGE" "$partition_img" "$NC"
+            python3 "$SCRIPT_DIR/bin/avbtool.py" add_hash_footer \
+                --image "$level1_dir/Image/$partition_img" \
+                --partition_name "$partition_name" \
+                --dynamic_partition_size || {
+                printf '%sWarning: Failed to add AVB footer to %s (continuing anyway)%s\n' "$ORANGE" "$partition_img" "$NC"
+            }
+        else
+            cd "$SCRIPT_DIR"
+            printf '%sError: Failed to repack %s partition%s\n' "$RED" "$partition_name" "$NC" >&2
+            exit 1
+        fi
+        
+        printf '%sSuccess packing %s partition.%s\n' "$GREEN" "$partition_name" "$NC"
+    done
+
+    # pack system vendor product odm system_ext
+    for partition_name in system vendor product odm system_ext; do
+        # if _size. exists "$level2_dir/$partition_name"_fs_options?
+        local config_file="$level2_dir/.config/${partition_name}_size"
+        if [[ ! -f "$config_file" ]]; then
+            printf '%sError: Missing config file %s required for packing %s.%s\n' "$RED" "$config_file" "$partition_name" "$NC" >&2
+            exit 1
+
+        else
+            printf '%sPacking %s partition...%s\n' "$ORANGE" "$partition_name" "$NC"
+            part_name="$(basename "$level2_dir")"
+            printf '%sPacking %s partition...%s\n' "$ORANGE" "$partition_name" "$NC"
+
+            # auto-detect ext4 vs erofs
+
+            # auto-switch to mke2fs + e2fsdroid
+
+            # match AOSP build_image.py exactly
+
+            # add fallback retry once (+10%)
+
+            # support dynamic partitions (super)
+            INPUT_DIR=$level2_dir/$partition_name         # e.g. system
+            OUTPUT_IMG=$level2_dir/super/$partition_name.img         # e.g. system.img
 
 
+
+            FC="$level2_config/${partition_name}_file_contexts"
+            FS="$level2_config/${partition_name}_fs_config"
+
+            IMG_TMP="${level2_dir}.img"
+
+            # ---- Sanity ----
+            if [[ ! -d "$INPUT_DIR" ]]; then
+                echo "[ERROR] Input directory not found: $INPUT_DIR"
+                exit 1
+            fi
+
+            if [[ ! -f "$FC" || ! -f "$FS" ]]; then
+                echo "[ERROR] Missing fs config or file contexts"
+                exit 1
+            fi
+
+
+            MAKE_EXT4FS="make_ext4fs"
+
+
+            # ---- Dynamic size estimation ----
+            DIR_SIZE=$(du -sb "$INPUT_DIR" | awk '{print $1}')
+
+            # 16% metadata overhead
+            OVERHEAD=$(( DIR_SIZE * 16 / 100 ))
+
+            # Extra safety (journal, inode tables)
+            SAFETY=$(( 8 * 1024 * 1024 ))   # 8MB
+
+            RAW_SIZE=$(( DIR_SIZE + OVERHEAD + SAFETY ))
+
+            # Align to 4K
+            ALIGN=4096
+            IMG_SIZE=$(( (RAW_SIZE + ALIGN - 1) / ALIGN * ALIGN ))
+
+            # ---- Build ext4 image ----
+            rm -f "$IMG_TMP"
+
+            CMD=(
+                "$MAKE_EXT4FS"
+                -J
+                -L system
+                -T -1
+                -S "$FC"
+                -C "$FS"
+                -l "$IMG_SIZE"
+                -a "$partition_name"
+                "$IMG_TMP"
+                "$INPUT_DIR"
+            )
+
+
+            "${CMD[@]}"
+
+            # ---- Validate output ----
+            if [[ ! -f "$IMG_TMP" ]]; then
+                echo "[ERROR] Image was not created"
+                exit 1
+            fi
+
+            IMG_LEN=$(stat -c '%s' "$IMG_TMP")
+
+            if (( IMG_LEN <= 2048 )); then
+                echo "[ERROR] Image too small ($IMG_LEN bytes)"
+                rm -f "$IMG_TMP"
+                exit 1
+            fi
+
+            # ---- Finalize ----
+            rm -f "$OUTPUT_IMG"
+            mv "$IMG_TMP" "$OUTPUT_IMG"
+
+            echo "[SUCCESS] Packed $partition_name → $(basename "$OUTPUT_IMG")"
+
+
+
+
+            printf '%sSuccess packing %s partition.%s\n' "$GREEN" "$partition_name" "$NC"
+
+        fi
+
+
+    done
+
+    # # ext super.img
+
+    # # size=$(<"$config_file")
+
+    # # if (( size < 1048576 )); then
+    # #     size=1048576
+    # # elif (( size < 536870912 )); then
+    # #     size=536870912
+    # # elif (( size < 1073741824 )); then
+    # #     size=1073741824
+    # # elif (( size < 2147483648 )); then
+    # #     size=2147483648
+    # # fi
+
+
+
+    # # make_ext4fs -s -J -L system -T 1230764400 \
+        # #     -S "$level2_config/super_file_contexts" \
+        # #     -C "$level2_config/super_fs_config" \
+        # #     -l "$size" \
+        # #     -a "super" \
+        # #     "$level1_dir/super.img" \
+        # #     "$level2_dir/super"
+
+
+    # # repacking super.img
+    # printf '%sRepacking super.img...%s\n' "$ORANGE" "$NC"
+    # python3 "$PYTHON_TOOLS_DIR/lpmake.py" "$level2_dir/super" $level2_config/super_config -o "$level1_dir/super.img"
+    # printf '%sSuccess repacking super.img.%s\n' "$GREEN" "$NC"
+
+
+    # -----------------------------
+    # Inputs
+    # -----------------------------
+    INPUT_DIR="$level2_dir/super"
+    OUTPUT_IMG="$level1_dir/super.img"
+    BINARCH="$SCRIPT_DIR/bin"
+
+    CONFIG_DIR="$level2_config"
+    SUPER_SIZE_FILE="$CONFIG_DIR/super_size"
+
+    # -----------------------------
+    # Read super size
+    # -----------------------------
+    SUPER_SIZE=$(tr -d '\r\n' < "$SUPER_SIZE_FILE")
+
+    # -----------------------------
+    # Base lpmake args
+    # -----------------------------
+    START_ARGS=(
+        --virtual-ab
+        --metadata-size 65536
+        --super-name super
+        --metadata-slots 2
+        --device "super:$SUPER_SIZE"
+        --group "slot_a:$SUPER_SIZE"
+    )
+
+    MID_ARGS=( --group "slot_b:4096" )
+    END_ARGS=( --output "$OUTPUT_IMG" )
+
+    SLOT_A_ARGS=()
+    SLOT_B_ARGS=()
+
+    # -----------------------------
+    # Iterate partition images
+    # -----------------------------
+
+    shopt -s nullglob
+    for img in "$INPUT_DIR"/*.img; do
+        base="$(basename "$img")"
+        
+        # Skip already-processed sparse images
+        [[ "$base" == *_sparse.img ]] && continue
+        
+        part="${base%.img}"
+
+        # Get the actual data size first (before any conversion)
+        if file "$img" | grep -q "Android sparse image"; then
+            # Already sparse, get the uncompressed size
+            size=$(stat -c '%s' "$img" 2>/dev/null || echo 0)
+            img_to_use="$img"
+        else
+            # Get raw size before converting
+            size=$(stat -c '%s' "$img" 2>/dev/null || echo 0)
+            # Convert raw ext4 to sparse format for lpmake
+            printf '%sConverting %s to sparse format for lpmake...%s\n' "$ORANGE" "$base" "$NC"
+            img_to_use="${img%.img}_sparse.img"
+            img2simg "$img" "$img_to_use"
+        fi
+        
+        # Ensure size is a valid number
+        [[ "$size" =~ ^[0-9]+$ ]] || size=0
+
+        (( size > 0 )) || continue
+
+        if [[ "$base" != *_b.img ]]; then
+            SLOT_A_ARGS+=(
+                --partition "$part:readonly:$size:slot_a"
+                --image "$part=$img_to_use"
+            )
+        else
+            SLOT_B_ARGS+=(
+                --partition "$part:readonly:0:slot_b"
+            )
+        fi
+    done
+    shopt -u nullglob
+
+
+    # -----------------------------
+    # Build super.img
+    # -----------------------------
+    CMD=(
+        "$BINARCH/lpmake"
+        "${START_ARGS[@]}"
+        "${SLOT_A_ARGS[@]}"
+        "${MID_ARGS[@]}"
+        "${SLOT_B_ARGS[@]}"
+        "${END_ARGS[@]}"
+    )
+
+    echo "[EXEC] ${CMD[*]}"
+    "${CMD[@]}"
+
+    # -----------------------------
+    # Validate output
+    # -----------------------------
+    if [[ ! -s "$OUTPUT_IMG" ]]; then
+        echo "[ERROR] super.img not created or empty"
+        exit 1
+    fi
+
+    IMG_SIZE=$(stat -c '%s' "$OUTPUT_IMG")
+    (( IMG_SIZE >= 1048576 )) || {
+        rm -f "$OUTPUT_IMG"
+        echo "[ERROR] super.img too small"
+        exit 1
+    }
+
+    echo "[SUCCESS] Packed super → $(basename "$OUTPUT_IMG")"
+
+
+    # -----------------------------
+    # Finalize
+    # -----------------------------
+ 
+
+    echo "[SUCCESS] Packed super → $(basename "$OUTPUT_IMG")"
+
+    # repacking super.img
+    printf '%sRepacking super.img...%s\n' "$ORANGE" "$NC"
+    python3 "$PYTHON_TOOLS_DIR/lpmake.py" "$level2_dir/super" $level2_config/super_config -o "$level1_dir/super.img"
+    printf '%sSuccess repacking super.img.%s\n' "$GREEN" "$NC"
+
+    # Create disabled vbmeta image for modified partitions
+    printf '%sCreating disabled vbmeta image...%s\n' "$ORANGE" "$NC"
+    python3 "$SCRIPT_DIR/bin/avbtool.py" make_vbmeta_image \
+        --flags 2 \
+        --padding_size 4096 \
+        --output "$level1_dir/Image/vbmeta.img"
+    printf '%sSuccess creating vbmeta.img.%s\n' "$GREEN" "$NC"
+
+    # move level1 parameter.txt to OUTDIR/level1/Image/parameter.txt
+    cp "$level1_dir/parameter.txt" "$level1_dir/Image/parameter.txt"
+    cp "$level1_dir/package-file" "$level1_dir/Image/package-file"
+    cp "$level1_dir//MiniLoaderAll.bin" "$level1_dir/Image/MiniLoaderAll.bin"
+
+    # Move remaining images (excluding boot, recovery, vbmeta which were already handled)
+    for image in $level1_dir/*.img; do
+        local img_name="$(basename "$image")"
+        if [[ ! -f "$level1_dir/Image/$img_name" ]]; then
+            mv "$image" "$level1_dir/Image/$img_name"
+        fi
+    done
+
+
+    ${BIN_AFPTOOL} -pack "$level1_dir" "$OUTDIR/update.img"
+    ${BIN_RK_IMAGE_MAKER} -RK3576  "$level1_dir/Image/MiniLoaderAll.bin" "$OUTDIR/update.img" "$OUTDIR/rk-updated-firmware.img"
 }
 
 
@@ -539,16 +881,12 @@ if [[ "$LEVEL2" == true && "$UNPACK" == true ]]; then
     extract_level_one_firmware
 
     extract_level_two_firmware
-    
+
 fi
 
-if [[ "$LEVEL1" == true && "$PACK" == true ]]; then
-    echo "Unpacking Level 1 firmware..."
-    pack_level_one_firmware
-fi
-
-if [[ "$LEVEL2" == true && "$PACK" == true ]]; then
-    echo "Unpacking Level 2 firmware..."
+if [[ "$PACK" == true ]]; then
+    echo "Packing all level 1 firmware..."
+    pack_all_level_firmware
 fi
 
 exit 0
