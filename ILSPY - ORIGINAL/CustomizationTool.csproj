@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <AssemblyName>CustomizationTool</AssemblyName>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>True</UseWindowsForms>
+    <TargetFramework>net48</TargetFramework>
+  </PropertyGroup>
+  <PropertyGroup>
+    <LangVersion>13.0</LangVersion>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace />
+  </PropertyGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <Reference Include="AMLogger">
+      <HintPath>..\CustomizationTool\AMLogger.dll</HintPath>
+    </Reference>
+    <Reference Include="AxInterop.WMPLib">
+      <HintPath>..\CustomizationTool\AxInterop.WMPLib.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Core" />
+    <Reference Include="Interop.WMPLib">
+      <HintPath>..\CustomizationTool\Interop.WMPLib.dll</HintPath>
+    </Reference>
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Management" />
+  </ItemGroup>
+</Project>
